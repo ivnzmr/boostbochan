@@ -1,0 +1,21 @@
+[package]
+name = "stats-core"
+version = "0.1.0"
+edition = "2024"
+description = "BoostBochan: recolección y agregación de estadísticas de LoL (soloQ alto elo + partidas pro)"
+
+[lib]
+name = "stats_core"
+
+[[bin]]
+name = "stats-builder"
+path = "src/bin/stats_builder.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "native-tls"] }
+tokio = { version = "1", features = ["time", "sync", "macros", "rt-multi-thread"] }
+thiserror = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+flate2 = "1"

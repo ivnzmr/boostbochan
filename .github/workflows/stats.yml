@@ -1,0 +1,53 @@
+name: Estadísticas diarias
+
+# Downloads high-elo soloQ + pro games, aggregates them and publishes
+# stats.json.gz to the "data" release. The app downloads it without any API key.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stats
+  cancel-in-progress: false
+
+jobs:
+  build-stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/stats-core
+
+      - name: Preparar release de datos
+        # Prerelease so it never becomes "latest" (that one is reserved for app updates).
+        run: |
+          gh release view data >/dev/null 2>&1 || gh release create data \
+            --title "Estadísticas" \
+            --notes "Datos generados automáticamente cada día. No es una versión de la app." \
+            --prerelease
+
+      - name: Descargar base de datos anterior
+        run: |
+          mkdir -p data
+          gh release download data -p stats.db -D data || echo "Primera ejecución: base de datos nueva"
+
+      - name: Recoger y calcular estadísticas
+        env:
+          RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+        run: >
+          cargo run --release --manifest-path crates/stats-core/Cargo.toml --bin stats-builder --
+          --db data/stats.db --out data/stats.json.gz --minutes 300
+
+      - name: Publicar
+        run: gh release upload data data/stats.db data/stats.json.gz --clobber
