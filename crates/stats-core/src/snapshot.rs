@@ -9,12 +9,16 @@ use flate2::write::GzEncoder;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+use crate::build_db::{self, BenchRow, BuildRow};
+use crate::builds::KINDS;
 use crate::db::{self, ChampRow, MatchupRow, ROLES, SOURCE_PRO, SOURCE_SOLOQ};
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 /// Refuse absurdly large downloads (protects the app from a corrupted/hostile file).
 const MAX_DECOMPRESSED_BYTES: u64 = 200 * 1024 * 1024;
 const SOURCES: [&str; 2] = [SOURCE_SOLOQ, SOURCE_PRO];
+/// Upper bound for any aggregated benchmark sum; keeps later additions far from overflow.
+const MAX_BENCH_VALUE: i64 = 1_000_000_000_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
@@ -24,6 +28,8 @@ pub struct Snapshot {
     pub pro_games: i64,
     pub champs: Vec<ChampRow>,
     pub matchups: Vec<MatchupRow>,
+    pub builds: Vec<BuildRow>,
+    pub bench: Vec<BenchRow>,
 }
 
 /// Compact on-disk form: sources and roles as small indexes, rows as arrays.
@@ -38,6 +44,12 @@ struct CompactFile {
     champs: Vec<(u8, u8, i64, i64, i64)>,
     /// [source, role, champ, enemy, enemy_role, games, wins]
     matchups: Vec<(u8, u8, i64, i64, u8, i64, i64)>,
+    /// [source, role, champ, kind, bucket, key, games, wins]
+    #[serde(default)]
+    builds: Vec<(u8, u8, i64, u8, u8, String, i64, i64)>,
+    /// [role, champ, games, minutes, cs, gold, vision, deaths, damage, kp]
+    #[serde(default)]
+    bench: Vec<(u8, i64, i64, f64, i64, i64, i64, i64, i64, f64)>,
 }
 
 fn index_of(list: &[&str], value: &str) -> Result<u8, String> {
@@ -68,6 +80,8 @@ impl Snapshot {
             pro_games: summary.pro_games,
             champs: db::champion_rows(conn)?,
             matchups: db::all_matchup_rows(conn)?,
+            builds: build_db::build_rows(conn)?,
+            bench: build_db::bench_rows(conn)?,
         })
     }
 
@@ -95,6 +109,40 @@ impl Snapshot {
                         index_of(ROLES, &m.enemy_role)?,
                         m.games,
                         m.wins,
+                    ))
+                })
+                .collect::<Result<_, String>>()?,
+            builds: self
+                .builds
+                .iter()
+                .map(|b| {
+                    Ok((
+                        index_of(&SOURCES, &b.source)?,
+                        index_of(ROLES, &b.role)?,
+                        b.champ,
+                        index_of(KINDS, &b.kind)?,
+                        b.bucket,
+                        b.key.clone(),
+                        b.games,
+                        b.wins,
+                    ))
+                })
+                .collect::<Result<_, String>>()?,
+            bench: self
+                .bench
+                .iter()
+                .map(|b| {
+                    Ok((
+                        index_of(ROLES, &b.role)?,
+                        b.champ,
+                        b.games,
+                        b.minutes,
+                        b.cs,
+                        b.gold,
+                        b.vision,
+                        b.deaths,
+                        b.damage,
+                        b.kp,
                     ))
                 })
                 .collect::<Result<_, String>>()?,
@@ -148,6 +196,38 @@ impl Snapshot {
                 })
             })
             .collect::<Result<_, String>>()?;
+        let builds = file
+            .builds
+            .into_iter()
+            .map(|(s, r, champ, kind, bucket, key, games, wins)| {
+                check_counts(games, wins)?;
+                if key.len() > 128 {
+                    return Err("clave de build demasiado larga".to_string());
+                }
+                Ok(BuildRow {
+                    source: name_at(&SOURCES, s)?.to_string(),
+                    role: name_at(ROLES, r)?.to_string(),
+                    champ,
+                    kind: name_at(KINDS, kind)?.to_string(),
+                    bucket,
+                    key,
+                    games,
+                    wins,
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        let bench = file
+            .bench
+            .into_iter()
+            .map(|(r, champ, games, minutes, cs, gold, vision, deaths, damage, kp)| {
+                let counts_ok = [games, cs, gold, vision, deaths, damage].iter().all(|v| (0..=MAX_BENCH_VALUE).contains(v));
+                let floats_ok = [minutes, kp].iter().all(|v| v.is_finite() && (0.0..=MAX_BENCH_VALUE as f64).contains(v));
+                if !counts_ok || !floats_ok {
+                    return Err("referencia inválida".to_string());
+                }
+                Ok(BenchRow { role: name_at(ROLES, r)?.to_string(), champ, games, minutes, cs, gold, vision, deaths, damage, kp })
+            })
+            .collect::<Result<_, String>>()?;
 
         Ok(Self {
             generated_at: file.generated_at,
@@ -156,6 +236,8 @@ impl Snapshot {
             pro_games: file.pro_games.max(0),
             champs,
             matchups,
+            builds,
+            bench,
         })
     }
 }
@@ -180,6 +262,17 @@ mod tests {
                 games: 2,
                 wins: 1,
             }],
+            builds: vec![BuildRow {
+                source: "soloq".into(),
+                role: "TOP".into(),
+                champ: 122,
+                kind: "rune".into(),
+                bucket: 255,
+                key: "8000:8300:1,2,3,4:5,6:5005,5008,5001".into(),
+                games: 5,
+                wins: 3,
+            }],
+            bench: vec![BenchRow { role: "TOP".into(), champ: 122, games: 5, minutes: 150.0, cs: 1200, gold: 60000, vision: 100, deaths: 15, damage: 100000, kp: 2.5 }],
         }
     }
 
@@ -202,13 +295,20 @@ mod tests {
     }
 
     #[test]
+    fn rejects_negative_benchmarks() {
+        let mut snapshot = sample();
+        snapshot.bench[0].damage = -5;
+        assert!(Snapshot::from_gzip(&snapshot.to_gzip().unwrap()).is_err());
+    }
+
+    #[test]
     fn rejects_invalid_rows() {
-        let json = br#"{"v":1,"generated_at":0,"patches":[],"soloq_games":0,"pro_games":0,"champs":[[0,9,1,1,1]],"matchups":[]}"#;
+        let json = br#"{"v":2,"generated_at":0,"patches":[],"soloq_games":0,"pro_games":0,"champs":[[0,9,1,1,1]],"matchups":[],"builds":[],"bench":[]}"#;
         let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
         enc.write_all(json).unwrap();
         assert!(Snapshot::from_gzip(&enc.finish().unwrap()).is_err());
 
-        let json = br#"{"v":1,"generated_at":0,"patches":[],"soloq_games":0,"pro_games":0,"champs":[[0,0,1,1,5]],"matchups":[]}"#;
+        let json = br#"{"v":2,"generated_at":0,"patches":[],"soloq_games":0,"pro_games":0,"champs":[[0,0,1,1,5]],"matchups":[],"builds":[],"bench":[]}"#;
         let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
         enc.write_all(json).unwrap();
         assert!(Snapshot::from_gzip(&enc.finish().unwrap()).is_err(), "wins > games");

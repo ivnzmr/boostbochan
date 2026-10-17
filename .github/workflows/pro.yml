@@ -1,0 +1,51 @@
+name: Partidas pro
+
+# Leaguepedia rate-limits anonymous queries hard, so pro games are fetched in small
+# batches several times a day (the cursor in stats.db resumes where it stopped).
+on:
+  schedule:
+    - cron: "30 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Shares the database with stats.yml: never run both at once.
+concurrency:
+  group: stats
+  cancel-in-progress: false
+
+jobs:
+  pro-games:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/stats-core
+
+      - name: Preparar release de datos
+        run: |
+          gh release view data >/dev/null 2>&1 || gh release create data \
+            --title "Estadísticas" \
+            --notes "Datos generados automáticamente cada día. No es una versión de la app." \
+            --prerelease
+
+      - name: Descargar base de datos anterior
+        run: |
+          mkdir -p data
+          gh release download data -p stats.db -D data || echo "Primera ejecución: base de datos nueva"
+
+      - name: Recoger partidas pro
+        run: >
+          cargo run --release --manifest-path crates/stats-core/Cargo.toml --bin stats-builder --
+          --db data/stats.db --out data/stats-v2.json.gz --minutes 25 --skip-soloq
+
+      - name: Publicar
+        run: gh release upload data data/stats.db data/stats-v2.json.gz --clobber

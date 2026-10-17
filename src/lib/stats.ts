@@ -37,6 +37,46 @@ export const getMatchups = (role: Role, enemies: number[]): Promise<MatchupRow[]
   invoke("stats_matchups", { role, enemies });
 export const syncStats = (): Promise<void> => invoke("stats_sync");
 
+export type BuildKind = "item" | "core" | "rune" | "spell" | "skill";
+
+/** Enemy team damage profile: 0 mixed, 1 AD heavy, 2 AP heavy; 255 = not bucketed. */
+export type Bucket = 0 | 1 | 2;
+export const BUCKET_ANY = 255;
+
+export interface BuildRow {
+  source: Source;
+  role: Role;
+  champ: number;
+  kind: BuildKind;
+  bucket: number;
+  key: string;
+  games: number;
+  wins: number;
+}
+
+/** Sums over `games` games (divide to get per-game / per-minute averages). */
+export interface BenchRow {
+  role: Role;
+  champ: number;
+  games: number;
+  minutes: number;
+  cs: number;
+  gold: number;
+  vision: number;
+  deaths: number;
+  damage: number;
+  kp: number;
+}
+
+export interface BuildData {
+  rows: BuildRow[];
+  champBench: BenchRow | null;
+  roleBench: BenchRow | null;
+}
+
+export const getBuildData = (role: Role, champ: number): Promise<BuildData> =>
+  invoke("stats_build", { role, champ });
+
 export function onStatsUpdated(callback: () => void): Promise<UnlistenFn> {
   return listen("stats-updated", () => callback());
 }

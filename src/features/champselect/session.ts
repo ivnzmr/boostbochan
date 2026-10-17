@@ -7,6 +7,7 @@ export interface TeamSlot {
   champ: number;
   role: Role | null;
   isLocal: boolean;
+  spells: [number, number];
 }
 
 export interface EnemyPick {
@@ -16,6 +17,9 @@ export interface EnemyPick {
 
 export interface SessionView {
   localRole: Role | null;
+  // Champion currently hovered or locked by the local player (0 if none).
+  localChamp: number;
+  localSpells: [number, number];
   myTeam: TeamSlot[];
   enemies: EnemyPick[];
   /** Banned or already picked champions: cannot be recommended. */
@@ -63,6 +67,7 @@ export function parseSession(raw: unknown): SessionView | null {
       champ: slotChampion(m),
       role: roleFromLcu(m.assignedPosition),
       isLocal: m.cellId === localCell,
+      spells: [asId(m.spell1Id), asId(m.spell2Id)] as [number, number],
     }));
 
   const enemies: EnemyPick[] = asArray(session.theirTeam)
@@ -81,6 +86,8 @@ export function parseSession(raw: unknown): SessionView | null {
 
   return {
     localRole: myTeam.find((s) => s.isLocal)?.role ?? null,
+    localChamp: asId(asRecord(session.myTeam.find((m) => asRecord(m)?.cellId === localCell))?.championId),
+    localSpells: myTeam.find((s) => s.isLocal)?.spells ?? [0, 0],
     myTeam,
     enemies,
     unavailable: [...new Set(unavailable)],

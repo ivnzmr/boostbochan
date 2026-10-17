@@ -5,9 +5,9 @@ use serde::Deserialize;
 
 use crate::collector::{Collector, Progress};
 use crate::db::{self, Participant, SOURCE_PRO};
+use crate::static_data::{self, normalize_name};
 
 const LEAGUEPEDIA_API: &str = "https://lol.fandom.com/api.php";
-const DDRAGON: &str = "https://ddragon.leagueoflegends.com";
 const USER_AGENT: &str = "BoostBochan/0.1 (LoL companion app; pro matchup stats)";
 const PAGE_SIZE: usize = 500;
 const MAX_PAGES_PER_RUN: usize = 200;
@@ -51,10 +51,6 @@ pub struct ProRow {
     pub date_time: String,
 }
 
-pub fn normalize_name(name: &str) -> String {
-    name.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase()
-}
-
 pub fn map_role(role: &str) -> Option<&'static str> {
     match role {
         "Top" => Some("TOP"),
@@ -86,6 +82,7 @@ pub fn to_participants(rows: &[ProRow], champions: &HashMap<String, i64>) -> Opt
                     _ => return None,
                 },
                 win: row.player_win == "Yes",
+                details: None,
             })
         })
         .collect()
@@ -116,37 +113,6 @@ fn lookback_start() -> String {
 /// Both are "YYYY-MM-DD HH:MM:SS", so string comparison is chronological.
 pub fn start_cursor(stored: Option<String>, lookback: String) -> String {
     stored.filter(|c| *c > lookback).unwrap_or(lookback)
-}
-
-#[derive(Deserialize)]
-struct DdChampion {
-    id: String,
-    key: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct DdChampionList {
-    data: HashMap<String, DdChampion>,
-}
-
-async fn champion_ids(http: &reqwest::Client) -> Result<HashMap<String, i64>, String> {
-    let versions: Vec<String> = http
-        .get(format!("{DDRAGON}/api/versions.json"))
-        .send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-    let version = versions.first().ok_or("Data Dragon sin versiones")?;
-    let list: DdChampionList = http
-        .get(format!("{DDRAGON}/cdn/{version}/data/en_US/champion.json"))
-        .send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-
-    Ok(list
-        .data
-        .values()
-        .filter_map(|c| c.key.parse::<i64>().ok().map(|key| (c, key)))
-        .flat_map(|(c, key)| [(normalize_name(&c.name), key), (normalize_name(&c.id), key)])
-        .collect())
 }
 
 /// Rows at or after `cursor`, oldest first. `>=` re-fetches the boundary game so a
@@ -210,7 +176,7 @@ pub async fn collect(c: &Collector) -> Result<usize, String> {
         .map_err(|e| e.to_string())?;
 
     c.report(Progress::stage(SOURCE_PRO, "Cargando campeones…"));
-    let champions = champion_ids(&http).await?;
+    let champions = static_data::load().await?.champion_ids;
     let stored = c.with_db(|conn| db::get_meta(conn, CURSOR_KEY)).flatten();
     let mut cursor = start_cursor(stored, lookback_start());
     let mut new_games = 0;
@@ -312,7 +278,7 @@ mod tests {
             &champions,
         )
         .unwrap();
-        assert_eq!(players[0], Participant { champ: 145, role: "BOTTOM".into(), team: 100, win: true });
+        assert_eq!(players[0], Participant { champ: 145, role: "BOTTOM".into(), team: 100, win: true, details: None });
         assert_eq!(players[1].team, 200);
         assert!(!players[1].win);
     }
@@ -328,7 +294,7 @@ mod tests {
     #[ignore]
     async fn live_leaguepedia_page_maps_to_games() {
         let http = reqwest::Client::builder().user_agent(USER_AGENT).build().unwrap();
-        let champions = champion_ids(&http).await.unwrap();
+        let champions = static_data::load().await.unwrap().champion_ids;
         let rows = fetch_page(&http, &lookback_start()).await.unwrap();
         let mut games: HashMap<String, Vec<ProRow>> = HashMap::new();
         for row in rows.iter().cloned() {

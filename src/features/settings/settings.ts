@@ -22,7 +22,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   autoSpells: true,
   autoItems: true,
   profile: true,
-  overlay: false,
+  overlay: true,
   coach: true,
 });
 
@@ -51,38 +51,38 @@ export const FEATURES: readonly FeatureInfo[] = [
   {
     key: "autoRunes",
     label: "Importar runas",
-    description: "Crea la página de runas al elegir campeón.",
-    available: false,
+    description: "Crea la página de runas de Challenger/GM al elegir campeón.",
+    available: true,
   },
   {
     key: "autoSpells",
     label: "Hechizos de invocador",
     description: "Fija los hechizos recomendados en selección de campeón.",
-    available: false,
+    available: true,
   },
   {
     key: "autoItems",
     label: "Sets de objetos",
-    description: "Escribe la build recomendada en la tienda del juego.",
-    available: false,
+    description: "Crea un set de objetos en la tienda adaptado al equipo enemigo (AD, AP o mixto).",
+    available: true,
   },
   {
     key: "profile",
     label: "Perfil e historial",
-    description: "Rango, historial de partidas y estadísticas por campeón.",
-    available: false,
+    description: "Rango, historial y estadísticas por campeón, leídos del cliente.",
+    available: true,
   },
   {
     key: "overlay",
     label: "Overlay en partida",
-    description: "Ventana sobre el juego con tu oro y próxima compra.",
-    available: false,
+    description: "Sobre el juego: oro, CS/min frente a Challenger y siguiente objeto. Requiere modo ventana o sin bordes.",
+    available: true,
   },
   {
     key: "coach",
     label: "Coach IA post-partida",
-    description: "Análisis de tu partida con consejos concretos.",
-    available: false,
+    description: "Al acabar cada partida, nota y consejos concretos comparando tus números con Challenger.",
+    available: true,
   },
 ];
 

@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 pub const SOURCE_SOLOQ: &str = "soloq";
 pub const SOURCE_PRO: &str = "pro";
 /// SoloQ queries only use the most recent N patches collected.
-const RECENT_PATCHES: i64 = 2;
+pub(crate) const RECENT_PATCHES: i64 = 2;
+/// Tables whose rows are keyed by (source, patch) and pruned together.
+const TABLES_BY_SOURCE: [&str; 5] = ["matches", "champ_stats", "matchups", "build_stats", "bench"];
 /// Pro games are bucketed by month (stored in `patch` as `year * 12 + month - 1`);
 /// only the newest N months are used and kept.
 pub const PRO_MONTHS: i64 = 3;
@@ -24,6 +26,8 @@ pub struct Participant {
     pub role: String,
     pub team: i64,
     pub win: bool,
+    /// Build and performance data (soloQ only; pro games have none).
+    pub details: Option<crate::build_db::PlayerDetails>,
 }
 
 /// A game is usable only with 10 players, 5 per team, each role filled once per team.
@@ -104,6 +108,7 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS matchups_lookup ON matchups(role, enemy);
          CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
+    crate::build_db::create_tables(&conn)?;
     Ok(conn)
 }
 
@@ -153,6 +158,7 @@ pub fn insert_game(
                 source, patch, pair.role, pair.champ, pair.enemy, pair.enemy_role, pair.win as i64
             ])?;
         }
+        crate::build_db::insert_details(&tx, source, patch, players)?;
     }
     tx.commit()?;
     Ok(true)
@@ -176,7 +182,7 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<(
 }
 
 // Literal 2 = PRO_MONTHS - 1 (three month buckets including the newest).
-const RECENT_FILTER: &str = "((source = 'pro' AND patch >= (
+pub(crate) const RECENT_FILTER: &str = "((source = 'pro' AND patch >= (
     SELECT MAX(patch) FROM matches WHERE source = 'pro') - 2) OR (source = 'soloq' AND patch IN (
     SELECT DISTINCT patch FROM matches WHERE source = 'soloq' ORDER BY patch DESC LIMIT ?1)))";
 
@@ -242,7 +248,7 @@ pub fn prune_old_patches(conn: &mut Connection, keep: i64) -> rusqlite::Result<u
     let newest_pro: Option<i64> = tx.query_row("SELECT MAX(patch) FROM matches WHERE source = 'pro'", [], |r| r.get(0))?;
     let mut removed = 0;
     if let Some(newest) = newest_pro {
-        for table in ["matches", "champ_stats", "matchups"] {
+        for table in TABLES_BY_SOURCE {
             removed += tx.execute(
                 &format!("DELETE FROM {table} WHERE source = 'pro' AND patch < ?1"),
                 [newest - (PRO_MONTHS - 1)],
@@ -264,7 +270,7 @@ pub fn prune_old_patches(conn: &mut Connection, keep: i64) -> rusqlite::Result<u
         tx.commit()?;
         return Ok(removed);
     };
-    for table in ["matches", "champ_stats", "matchups"] {
+    for table in TABLES_BY_SOURCE {
         removed += tx.execute(&format!("DELETE FROM {table} WHERE source = 'soloq' AND patch < ?1"), [cutoff])?;
     }
     tx.commit()?;
@@ -304,8 +310,8 @@ mod tests {
             .enumerate()
             .flat_map(|(i, role)| {
                 [
-                    Participant { champ: 1 + i as i64, role: role.to_string(), team: 100, win: blue_win },
-                    Participant { champ: 101 + i as i64, role: role.to_string(), team: 200, win: !blue_win },
+                    Participant { champ: 1 + i as i64, role: role.to_string(), team: 100, win: blue_win, details: None },
+                    Participant { champ: 101 + i as i64, role: role.to_string(), team: 200, win: !blue_win, details: None },
                 ]
             })
             .collect()

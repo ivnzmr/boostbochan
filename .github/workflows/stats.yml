@@ -47,7 +47,7 @@ jobs:
           RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
         run: >
           cargo run --release --manifest-path crates/stats-core/Cargo.toml --bin stats-builder --
-          --db data/stats.db --out data/stats.json.gz --minutes 300
+          --db data/stats.db --out data/stats-v2.json.gz --minutes 300
 
       - name: Publicar
-        run: gh release upload data data/stats.db data/stats.json.gz --clobber
+        run: gh release upload data data/stats.db data/stats-v2.json.gz --clobber

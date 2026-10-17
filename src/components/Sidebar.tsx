@@ -1,6 +1,6 @@
-import { BarChart3, Home, Settings, Swords, type LucideIcon } from "lucide-react";
+import { BarChart3, GraduationCap, Home, Settings, Swords, UserRound, type LucideIcon } from "lucide-react";
 
-export type Page = "home" | "champselect" | "tierlist" | "settings";
+export type Page = "home" | "champselect" | "tierlist" | "profile" | "coach" | "settings";
 
 interface NavItem {
   page: Page;
@@ -12,6 +12,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { page: "home", label: "Inicio", icon: Home },
   { page: "champselect", label: "Selección de campeón", icon: Swords },
   { page: "tierlist", label: "Tier list", icon: BarChart3 },
+  { page: "profile", label: "Perfil", icon: UserRound },
+  { page: "coach", label: "Coach", icon: GraduationCap },
   { page: "settings", label: "Ajustes", icon: Settings },
 ];
 

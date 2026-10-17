@@ -57,8 +57,8 @@ export function SettingsPage() {
   return (
     <div className="max-w-3xl space-y-8">
       <div>
-        <h2 className="mb-1 text-lg font-semibold">Datos y API</h2>
-        <p className="mb-4 text-sm text-muted">Estadísticas para counters y tier list, guardadas en tu PC.</p>
+        <h2 className="mb-1 text-lg font-semibold">Estadísticas en línea</h2>
+        <p className="mb-4 text-sm text-muted">Se consultan en línea cada vez que abres la app; no se guarda nada en tu PC.</p>
         <DataPanel />
       </div>
       <div>

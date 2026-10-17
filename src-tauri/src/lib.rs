@@ -1,9 +1,8 @@
 mod commands;
 mod config;
 mod lcu;
+mod live;
 mod stats;
-
-use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,13 +12,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(lcu::LcuState::new())
+        .manage(stats::StatsState::default())
+        .manage(live::LiveState::new())
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&data_dir)?;
-            app.manage(stats::StatsState::new(data_dir));
-
             lcu::spawn_watcher(app.handle().clone());
-            stats::sync_if_stale(app.handle().clone());
+            stats::spawn_refresher(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -28,7 +25,10 @@ pub fn run() {
             stats::stats_summary,
             stats::stats_champions,
             stats::stats_matchups,
-            stats::stats_sync
+            stats::stats_build,
+            stats::stats_sync,
+            live::live_game_data,
+            live::overlay_set_visible
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

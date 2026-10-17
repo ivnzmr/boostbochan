@@ -3,7 +3,7 @@
 //!   2. collects pro games (Leaguepedia) and, if RIOT_API_KEY is set, high-elo soloQ games,
 //!   3. prunes old patches and writes the published `stats.json.gz`.
 //!
-//! Usage: stats-builder --db data/stats.db --out data/stats.json.gz [--minutes 300] [--skip-soloq] [--skip-pro]
+//! Usage: stats-builder --db data/stats.db --out data/stats-v2.json.gz [--minutes 300] [--skip-soloq] [--skip-pro]
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -30,7 +30,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         db: PathBuf::from("data/stats.db"),
-        out: PathBuf::from("data/stats.json.gz"),
+        out: PathBuf::from("data/stats-v2.json.gz"),
         minutes: 300,
         skip_soloq: false,
         skip_pro: false,

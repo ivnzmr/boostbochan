@@ -1,3 +1,5 @@
+pub mod build_db;
+pub mod builds;
 pub mod collector;
 pub mod db;
 pub mod key;
@@ -6,3 +8,4 @@ pub mod pro;
 pub mod riot;
 pub mod snapshot;
 pub mod soloq;
+pub mod static_data;

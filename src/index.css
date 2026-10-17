@@ -43,3 +43,11 @@ body {
   background: var(--color-line);
   border-radius: 4px;
 }
+
+/* Transparent, click-through overlay window shown during games. */
+.overlay,
+.overlay body,
+.overlay #root {
+  background: transparent;
+  overflow: hidden;
+}

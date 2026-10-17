@@ -11,6 +11,8 @@ import { inferEnemyRoles, scoreCounters } from "./counters";
 import { RecommendationList } from "./RecommendationList";
 import type { EnemyPick } from "./session";
 import { TeamColumn, type SlotView } from "./TeamColumn";
+import { BuildPanel } from "../builds/BuildPanel";
+import { useBuild } from "../builds/useBuild";
 import { useLiveSession, usePlayerPool } from "./useChampSelect";
 
 const TEAM_SIZE = 5;
@@ -50,6 +52,7 @@ export function ChampSelectPage({ onOpenSettings }: ChampSelectPageProps) {
   const [simEnemies, setSimEnemies] = useState<readonly EnemyPick[]>(EMPTY_TEAM);
   const [pickingSlot, setPickingSlot] = useState<number | null>(null);
   const [poolOnly, setPoolOnly] = useState(false);
+  const [selectedChamp, setSelectedChamp] = useState(0);
 
   useEffect(() => {
     if (live?.localRole) setRole(live.localRole);
@@ -80,6 +83,20 @@ export function ChampSelectPage({ onOpenSettings }: ChampSelectPageProps) {
   }));
   const allySlots: SlotView[] = (live?.myTeam ?? []).map((s) => ({ champ: s.champ, role: s.role, highlight: s.isLocal }));
   const hasData = summary.soloqGames + summary.proGames > 0;
+
+  // Live: the champion the player hovers/locks; otherwise the clicked (or top) recommendation.
+  const buildChamp = live?.localChamp || selectedChamp || recs[0]?.champ || 0;
+  const { build, bucket, role: buildRole } = useBuild(buildChamp, live?.localChamp ? live.localRole : role, enemies);
+  const buildPanel = hasData && buildChamp > 0 && (
+    <BuildPanel
+      champ={buildChamp}
+      role={buildRole}
+      build={build}
+      bucket={bucket}
+      spells={live?.localSpells}
+      canApply={!!live && live.localChamp === buildChamp}
+    />
+  );
 
   const setEnemy = (index: number, champ: number) =>
     setSimEnemies((team) => team.map((e, i) => (i === index ? { champ, role: null } : e)));
@@ -122,7 +139,9 @@ export function ChampSelectPage({ onOpenSettings }: ChampSelectPageProps) {
           )}
         </div>
 
-        <div>
+        <div className="space-y-5">
+          {live?.localChamp ? buildPanel : null}
+          <div>
           <div className="mb-3 flex items-baseline justify-between">
             <h2 className="text-sm font-semibold tracking-widest text-muted uppercase">Mejores picks</h2>
             {hasData && (
@@ -150,8 +169,10 @@ export function ChampSelectPage({ onOpenSettings }: ChampSelectPageProps) {
               No hay suficientes partidas para este rol todavía.
             </p>
           ) : (
-            <RecommendationList recs={recs} mastery={pool.mastery} />
+            <RecommendationList recs={recs} mastery={pool.mastery} selected={buildChamp} onSelect={setSelectedChamp} />
           )}
+          </div>
+          {!live?.localChamp && buildPanel}
         </div>
       </div>
 

@@ -21,7 +21,7 @@ Cada día, GitHub Actions ([`stats.yml`](.github/workflows/stats.yml)) ejecuta `
 
 1. descarga las partidas recientes de clasificatoria de los jugadores **Challenger y Grandmaster de EUW** (Riot API) y las **partidas profesionales** de los últimos 3 meses ([Leaguepedia](https://lol.fandom.com), CC BY-SA);
 2. calcula emparejamientos y estadísticas por campeón y rol; una partida pro cuenta como 3 de soloQ;
-3. publica `stats.json.gz` en la release [`data`](../../releases/tag/data).
+3. publica `stats-v2.json.gz` en la release [`data`](../../releases/tag/data).
 
 La app descarga ese archivo; nunca llama a la Riot API ni necesita credenciales.
 
@@ -49,7 +49,7 @@ Generar estadísticas en local:
 
 ```bash
 RIOT_API_KEY=RGAPI-... cargo run --release --manifest-path crates/stats-core/Cargo.toml \
-  --bin stats-builder -- --db data/stats.db --out data/stats.json.gz --minutes 30
+  --bin stats-builder -- --db data/stats.db --out data/stats-v2.json.gz --minutes 30
 ```
 
 Publicar una versión: sube la versión en `src-tauri/tauri.conf.json` y `package.json`, y luego `git tag vX.Y.Z && git push --tags`. [`release.yml`](.github/workflows/release.yml) compila, firma y publica el instalador.

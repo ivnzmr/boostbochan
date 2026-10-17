@@ -9,14 +9,21 @@ interface RecommendationRowProps {
   rank: number;
   rec: Recommendation;
   mastery?: Mastery;
+  selected: boolean;
+  onSelect: (champ: number) => void;
 }
 
-function RecommendationRow({ rank, rec, mastery }: RecommendationRowProps) {
+function RecommendationRow({ rank, rec, mastery, selected, onSelect }: RecommendationRowProps) {
   const champion = useChampion(rec.champ);
   const delta = rec.score - rec.baseWinRate;
 
   return (
-    <li className="flex items-center gap-4 border-b border-line px-4 py-3 last:border-b-0 hover:bg-panel-2/50">
+    <li
+      onClick={() => onSelect(rec.champ)}
+      className={`flex cursor-pointer items-center gap-4 border-b border-line px-4 py-3 last:border-b-0 hover:bg-panel-2/50 ${
+        selected ? "bg-accent-soft" : ""
+      }`}
+    >
       <span className="w-5 text-center text-sm text-muted tabular-nums">{rank}</span>
       <ChampIcon champ={rec.champ} size={44} />
       <div className="min-w-0 flex-1">
@@ -68,13 +75,22 @@ function RecommendationRow({ rank, rec, mastery }: RecommendationRowProps) {
 interface RecommendationListProps {
   recs: readonly Recommendation[];
   mastery: ReadonlyMap<number, Mastery>;
+  selected: number;
+  onSelect: (champ: number) => void;
 }
 
-export function RecommendationList({ recs, mastery }: RecommendationListProps) {
+export function RecommendationList({ recs, mastery, selected, onSelect }: RecommendationListProps) {
   return (
     <ul className="overflow-hidden rounded-lg border border-line bg-panel">
       {recs.map((rec, index) => (
-        <RecommendationRow key={rec.champ} rank={index + 1} rec={rec} mastery={mastery.get(rec.champ)} />
+        <RecommendationRow
+          key={rec.champ}
+          rank={index + 1}
+          rec={rec}
+          mastery={mastery.get(rec.champ)}
+          selected={rec.champ === selected}
+          onSelect={onSelect}
+        />
       ))}
     </ul>
   );

@@ -1,13 +1,13 @@
-//! Statistics in the app: downloads the published snapshot (no API key needed),
-//! caches it on disk and answers queries from memory.
+//! Statistics in the app: queried online from the published snapshot (no API key,
+//! nothing written to disk) and answered from memory.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use stats_core::build_db::{BenchRow, BuildRow};
 use stats_core::db::{ChampRow, MatchupRow, ROLES};
 use stats_core::snapshot::Snapshot;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -15,57 +15,44 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::config::STATS_URL;
 
 pub const UPDATED_EVENT: &str = "stats-updated";
-const CACHE_FILE: &str = "stats.json.gz";
-/// Re-download when the cached snapshot is older than this.
-const MAX_AGE: Duration = Duration::from_secs(6 * 60 * 60);
-const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;
+/// While the app is open, check for a newer snapshot this often.
+const REFRESH_EVERY: Duration = Duration::from_secs(3 * 60 * 60);
+const RETRY_AFTER_ERROR: Duration = Duration::from_secs(5 * 60);
+const MAX_DOWNLOAD_BYTES: usize = 150 * 1024 * 1024;
 
-/// Snapshot plus an index of matchup rows by (role, enemy) for fast lookups.
+type RoleChamp = (String, i64);
+
+/// Snapshot plus indexes for fast lookups.
 struct Loaded {
     snapshot: Snapshot,
-    by_role_enemy: HashMap<(String, i64), Vec<usize>>,
+    matchups_by_role_enemy: HashMap<RoleChamp, Vec<usize>>,
+    builds_by_role_champ: HashMap<RoleChamp, Vec<usize>>,
 }
 
 impl Loaded {
     fn new(snapshot: Snapshot) -> Self {
-        let mut by_role_enemy: HashMap<(String, i64), Vec<usize>> = HashMap::new();
+        let mut matchups_by_role_enemy: HashMap<RoleChamp, Vec<usize>> = HashMap::new();
         for (i, m) in snapshot.matchups.iter().enumerate() {
-            by_role_enemy.entry((m.role.clone(), m.enemy)).or_default().push(i);
+            matchups_by_role_enemy.entry((m.role.clone(), m.enemy)).or_default().push(i);
         }
-        Self { snapshot, by_role_enemy }
+        let mut builds_by_role_champ: HashMap<RoleChamp, Vec<usize>> = HashMap::new();
+        for (i, b) in snapshot.builds.iter().enumerate() {
+            builds_by_role_champ.entry((b.role.clone(), b.champ)).or_default().push(i);
+        }
+        Self { snapshot, matchups_by_role_enemy, builds_by_role_champ }
     }
 }
 
+#[derive(Default)]
 pub struct StatsState {
-    cache_path: PathBuf,
     loaded: RwLock<Option<Arc<Loaded>>>,
     syncing: AtomicBool,
     last_error: RwLock<Option<String>>,
 }
 
 impl StatsState {
-    pub fn new(data_dir: PathBuf) -> Self {
-        let cache_path = data_dir.join(CACHE_FILE);
-        let loaded = std::fs::read(&cache_path)
-            .ok()
-            .and_then(|bytes| Snapshot::from_gzip(&bytes).map_err(|e| eprintln!("[stats] caché inválida: {e}")).ok())
-            .map(|s| Arc::new(Loaded::new(s)));
-        Self {
-            cache_path,
-            loaded: RwLock::new(loaded),
-            syncing: AtomicBool::new(false),
-            last_error: RwLock::new(None),
-        }
-    }
-
     fn current(&self) -> Option<Arc<Loaded>> {
         self.loaded.read().ok()?.clone()
-    }
-
-    fn is_stale(&self) -> bool {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-        self.current()
-            .is_none_or(|l| now - l.snapshot.generated_at > MAX_AGE.as_secs() as i64)
     }
 
     fn set_error(&self, error: Option<String>) {
@@ -77,7 +64,7 @@ impl StatsState {
 
 async fn download() -> Result<Vec<u8>, String> {
     let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(90))
         .user_agent(concat!("BoostBochan/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())?
@@ -98,40 +85,39 @@ async fn download() -> Result<Vec<u8>, String> {
 }
 
 async fn sync(app: &AppHandle) -> Result<(), String> {
-    let bytes = download().await?;
-    let snapshot = Snapshot::from_gzip(&bytes)?;
+    let snapshot = Snapshot::from_gzip(&download().await?)?;
     let state = app.state::<StatsState>();
     let is_newer = state.current().is_none_or(|l| snapshot.generated_at > l.snapshot.generated_at);
     if is_newer {
-        if let Err(e) = std::fs::write(&state.cache_path, &bytes) {
-            eprintln!("[stats] no se pudo guardar la caché: {e}");
-        }
         *state.loaded.write().map_err(|_| "estado bloqueado")? = Some(Arc::new(Loaded::new(snapshot)));
     }
     Ok(())
 }
 
-/// Starts a background download unless one is already running.
-pub fn spawn_sync(app: AppHandle) {
+/// Downloads now unless a download is already running. Returns whether it succeeded.
+async fn sync_now(app: &AppHandle) -> bool {
     let state = app.state::<StatsState>();
     if state.syncing.swap(true, Ordering::SeqCst) {
-        return;
+        return true;
     }
     let _ = app.emit(UPDATED_EVENT, ());
-    tauri::async_runtime::spawn(async move {
-        let result = sync(&app).await;
-        let state = app.state::<StatsState>();
-        state.set_error(result.err());
-        state.syncing.store(false, Ordering::SeqCst);
-        let _ = app.emit(UPDATED_EVENT, ());
-    });
+    let result = sync(app).await;
+    let ok = result.is_ok();
+    state.set_error(result.err());
+    state.syncing.store(false, Ordering::SeqCst);
+    let _ = app.emit(UPDATED_EVENT, ());
+    ok
 }
 
-/// Called on startup: refresh only when the cached data is old or missing.
-pub fn sync_if_stale(app: AppHandle) {
-    if app.state::<StatsState>().is_stale() {
-        spawn_sync(app);
-    }
+/// Keeps the in-memory statistics fresh for as long as the app runs.
+pub fn spawn_refresher(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let started = Instant::now();
+            let wait = if sync_now(&app).await { REFRESH_EVERY } else { RETRY_AFTER_ERROR };
+            tokio::time::sleep(wait.saturating_sub(started.elapsed())).await;
+        }
+    });
 }
 
 #[derive(Serialize)]
@@ -159,6 +145,10 @@ pub fn stats_summary(state: State<'_, StatsState>) -> SummaryDto {
     }
 }
 
+fn check_role(role: &str) -> Result<(), String> {
+    if ROLES.contains(&role) { Ok(()) } else { Err(format!("rol inválido: {role}")) }
+}
+
 #[tauri::command]
 pub fn stats_champions(state: State<'_, StatsState>) -> Vec<ChampRow> {
     state.current().map(|l| l.snapshot.champs.clone()).unwrap_or_default()
@@ -166,20 +156,67 @@ pub fn stats_champions(state: State<'_, StatsState>) -> Vec<ChampRow> {
 
 #[tauri::command]
 pub fn stats_matchups(state: State<'_, StatsState>, role: String, enemies: Vec<i64>) -> Result<Vec<MatchupRow>, String> {
-    if !ROLES.contains(&role.as_str()) {
-        return Err(format!("rol inválido: {role}"));
-    }
+    check_role(&role)?;
     let Some(loaded) = state.current() else {
         return Ok(Vec::new());
     };
     Ok(enemies
         .iter()
-        .flat_map(|enemy| loaded.by_role_enemy.get(&(role.clone(), *enemy)).into_iter().flatten())
+        .flat_map(|enemy| loaded.matchups_by_role_enemy.get(&(role.clone(), *enemy)).into_iter().flatten())
         .map(|&i| loaded.snapshot.matchups[i].clone())
         .collect())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildData {
+    rows: Vec<BuildRow>,
+    /// Benchmark of this champion in this role (Challenger/GM averages).
+    champ_bench: Option<BenchRow>,
+    /// All champions in this role combined.
+    role_bench: Option<BenchRow>,
+}
+
+fn sum_bench(role: &str, rows: &[&BenchRow]) -> Option<BenchRow> {
+    if rows.is_empty() {
+        return None;
+    }
+    Some(rows.iter().fold(
+        BenchRow { role: role.to_string(), champ: 0, games: 0, minutes: 0.0, cs: 0, gold: 0, vision: 0, deaths: 0, damage: 0, kp: 0.0 },
+        |acc, b| BenchRow {
+            games: acc.games + b.games,
+            minutes: acc.minutes + b.minutes,
+            cs: acc.cs + b.cs,
+            gold: acc.gold + b.gold,
+            vision: acc.vision + b.vision,
+            deaths: acc.deaths + b.deaths,
+            damage: acc.damage + b.damage,
+            kp: acc.kp + b.kp,
+            ..acc
+        },
+    ))
+}
+
 #[tauri::command]
-pub fn stats_sync(app: AppHandle) {
-    spawn_sync(app);
+pub fn stats_build(state: State<'_, StatsState>, role: String, champ: i64) -> Result<BuildData, String> {
+    check_role(&role)?;
+    let Some(loaded) = state.current() else {
+        return Ok(BuildData { rows: Vec::new(), champ_bench: None, role_bench: None });
+    };
+    let rows = loaded
+        .builds_by_role_champ
+        .get(&(role.clone(), champ))
+        .map(|ids| ids.iter().map(|&i| loaded.snapshot.builds[i].clone()).collect())
+        .unwrap_or_default();
+    let role_rows: Vec<&BenchRow> = loaded.snapshot.bench.iter().filter(|b| b.role == role).collect();
+    Ok(BuildData {
+        rows,
+        champ_bench: role_rows.iter().find(|b| b.champ == champ).map(|b| (*b).clone()),
+        role_bench: sum_bench(&role, &role_rows),
+    })
+}
+
+#[tauri::command]
+pub async fn stats_sync(app: AppHandle) {
+    sync_now(&app).await;
 }
